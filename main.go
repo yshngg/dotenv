@@ -40,9 +40,9 @@ func (o *option) validate() error {
 	return nil
 }
 
-func parseArgs(args []string) (option, error) {
+func parseArgs(args []string) (*option, error) {
 	shell := os.Getenv("SHELL")
-	opt := option{
+	opt := &option{
 		filepath: DefaultDotEnvFilepath,
 		cmd:      []string{shell},
 		watch:    false,
@@ -64,7 +64,7 @@ func parseArgs(args []string) (option, error) {
 			opt.cmd = args[1:]
 			args = []string{}
 		default:
-			return opt, fmt.Errorf("invalid argument: %s", args[0])
+			return nil, fmt.Errorf("invalid argument: %s", args[0])
 		}
 	}
 
