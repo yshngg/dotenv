@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -78,10 +79,17 @@ func main() {
 		return
 	}
 
-	if opt.help {
+	err = opt.validate()
+	if err != nil {
+		log.Fatalf("Error validating option: %v", err)
+	}
+
+	if err != nil || opt.help {
 		printUsage()
 		return
 	}
+
+	log.Printf("Using env file: %s", opt.filepath)
 
 	env, err := getEnviron(opt.filepath)
 	if err != nil {
@@ -89,7 +97,7 @@ func main() {
 		return
 	}
 	if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
-		os.Setenv("PS1", "(.env) # ")
+		env = append(env, "PS1=(.env) # ")
 	}
 	cmd, err := runCommand(opt.cmd[0], opt.cmd[1:], env)
 	if err != nil {
@@ -104,21 +112,29 @@ func main() {
 	} else {
 		killChan := make(chan *exec.Cmd)
 
-		go func() {
-			for cmd := range killChan {
-				if cmd == nil {
-					continue
-				}
-				err = cmd.Process.Kill()
-				if err != nil {
-					log.Printf("Error killing process: %v", err)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func(ctx context.Context) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case cmd := <-killChan:
+					if cmd == nil {
+						continue
+					}
+					log.Printf("Killing process: %d", cmd.Process.Pid)
+
+					if err = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+						log.Printf("Error killing process: %v", err)
+						continue
+					}
 				}
 			}
-		}()
+		}(ctx)
 
-		go func() {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+		go func(ctx context.Context, cmd *exec.Cmd) {
+			defer close(waitChan)
 
 			watchChan, err := watchFile(ctx, opt.filepath)
 			if err != nil {
@@ -126,10 +142,13 @@ func main() {
 				return
 			}
 			for {
+				if cmd != nil && cmd.ProcessState != nil {
+					return
+				}
 				select {
 				case <-watchChan:
-					if len(waitChan) != 0 {
-						killChan <- <-waitChan
+					if cmd != nil {
+						killChan <- cmd
 					}
 					env, err = getEnviron(opt.filepath)
 					if err != nil {
@@ -137,21 +156,22 @@ func main() {
 						return
 					}
 					if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
-						os.Setenv("PS1", "(.env) # ")
+						env = append(env, "PS1=(.env) # ")
 					}
 
-					cmd, err := runCommand(opt.cmd[0], opt.cmd[1:], env)
+					cmd, err = runCommand(opt.cmd[0], opt.cmd[1:], env)
 					if err != nil {
 						log.Fatalf("Error running command: %v", err)
 						return
 					}
+					log.Printf("Restarted command: %s %s", opt.cmd[0], strings.Join(opt.cmd[1:], " "))
 					waitChan <- cmd
 				case <-ctx.Done():
-					close(waitChan)
 					return
+				default: // no blocking
 				}
 			}
-		}()
+		}(ctx, cmd)
 	}
 
 	for cmd := range waitChan {
@@ -167,6 +187,7 @@ func runCommand(name string, args []string, env []string) (*exec.Cmd, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), env...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("running %s %s, err: %w", cmd, args, err)
