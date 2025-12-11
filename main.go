@@ -23,90 +23,165 @@ func printUsage() {
 	fmt.Println("Usage: dotenv [-f <file>] [-w]")
 }
 
-func parseArgs(args []string) (string, bool, bool) {
-	var (
-		filepath string = DefaultDotEnvFilepath
-		watch    bool   = false
-	)
+type option struct {
+	filepath string
+	cmd      []string
+	watch    bool
+	help     bool
+}
+
+func (o *option) validate() error {
+	if _, err := os.Stat(o.filepath); err != nil {
+		return err
+	}
+	if len(o.cmd) == 0 {
+		return fmt.Errorf("invalid command")
+	}
+	return nil
+}
+
+func parseArgs(args []string) (option, error) {
+	shell := os.Getenv("SHELL")
+	opt := option{
+		filepath: DefaultDotEnvFilepath,
+		cmd:      []string{shell},
+		watch:    false,
+		help:     false,
+	}
+
 	for len(args) > 0 {
 		switch args[0] {
 		case "-h":
-			return "", false, true
+			opt.help = true
+			return opt, nil
 		case "-f":
-			filepath = args[1]
+			opt.filepath = args[1]
 			args = args[2:]
 		case "-w":
-			watch = true
+			opt.watch = true
 			args = args[1:]
+		case "--":
+			opt.cmd = args[1:]
+			args = []string{}
 		default:
-			if _, err := os.Stat(filepath); err != nil {
-				return "", false, true
-			}
-			filepath = args[0]
-			args = args[1:]
+			return opt, fmt.Errorf("invalid argument: %s", args[0])
 		}
 	}
 
-	return filepath, watch, false
+	return opt, nil
 }
 
 func main() {
-	filepath, watch, help := parseArgs(os.Args[1:])
-	if help {
+	opt, err := parseArgs(os.Args[1:])
+	if err != nil {
+		log.Fatalf("Error parsing arguments: %v", err)
+		return
+	}
+
+	if opt.help {
 		printUsage()
 		return
 	}
 
-	if watch {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+	env, err := getEnviron(opt.filepath)
+	if err != nil {
+		log.Fatalf("Error getting Environ: %v", err)
+		return
+	}
+	if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
+		os.Setenv("PS1", "(.env) # ")
+	}
+	cmd, err := runCommand(opt.cmd[0], opt.cmd[1:], env)
+	if err != nil {
+		log.Fatalf("Error running command: %v", err)
+		return
+	}
+	waitChan := make(chan *exec.Cmd, 1)
+	waitChan <- cmd
 
-		watchChan, err := watchFile(ctx, filepath)
-		if err != nil {
-			log.Fatalf("Error watching file: %v", err)
-			return
-		}
+	if !opt.watch {
+		close(waitChan)
+	} else {
+		killChan := make(chan *exec.Cmd)
 
 		go func() {
+			for cmd := range killChan {
+				if cmd == nil {
+					continue
+				}
+				err = cmd.Process.Kill()
+				if err != nil {
+					log.Printf("Error killing process: %v", err)
+				}
+			}
+		}()
+
+		go func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			watchChan, err := watchFile(ctx, opt.filepath)
+			if err != nil {
+				log.Fatalf("Error watching file: %v", err)
+				return
+			}
 			for {
 				select {
 				case <-watchChan:
-					setEnviron(filepath)
+					if len(waitChan) != 0 {
+						killChan <- <-waitChan
+					}
+					env, err = getEnviron(opt.filepath)
+					if err != nil {
+						log.Fatalf("Error getting Environ: %v", err)
+						return
+					}
+					if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
+						os.Setenv("PS1", "(.env) # ")
+					}
+
+					cmd, err := runCommand(opt.cmd[0], opt.cmd[1:], env)
+					if err != nil {
+						log.Fatalf("Error running command: %v", err)
+						return
+					}
+					waitChan <- cmd
 				case <-ctx.Done():
+					close(waitChan)
 					return
 				}
 			}
 		}()
-		runShell()
-		return
 	}
-	setEnviron(filepath)
-	runShell()
+
+	for cmd := range waitChan {
+		if err = cmd.Wait(); err != nil {
+			log.Fatalf("Error waiting for command: %v", err)
+		}
+	}
 }
 
-func runShell() {
-	shell := os.Getenv("SHELL")
-	if strings.HasSuffix(shell, string(ShellTypeBash)) {
-		os.Setenv("PS1", "(.env) # ")
-	}
-
-	cmd := exec.Command(shell)
+func runCommand(name string, args []string, env []string) (*exec.Cmd, error) {
+	cmd := exec.Command(name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), env...)
 
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("Error running %s: %v", shell, err)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("running %s %s, err: %w", cmd, args, err)
 	}
+	return cmd, nil
 }
 
-func setEnviron(filepath string) error {
+func getEnviron(filepath string) ([]string, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
-		return fmt.Errorf("open file: %s, err: %w", filepath, err)
+		return nil, fmt.Errorf("open file: %s, err: %w", filepath, err)
 	}
 	defer f.Close()
 
+	env := make([]string, 0)
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -117,11 +192,9 @@ func setEnviron(filepath string) error {
 		}
 		key := strings.TrimSpace(keyValue[0])
 		value := strings.TrimSpace(keyValue[1])
-		if err := os.Setenv(key, value); err != nil {
-			log.Fatalf("Error setting environment variable %s=%s: %v", key, value, err)
-		}
+		env = append(env, key+"="+value)
 	}
-	return nil
+	return env, nil
 }
 
 func watchFile(ctx context.Context, filepath string) (<-chan struct{}, error) {
@@ -134,7 +207,7 @@ func watchFile(ctx context.Context, filepath string) (<-chan struct{}, error) {
 	go func() {
 		defer close(ch)
 
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(time.Millisecond * 100)
 		defer ticker.Stop()
 		for {
 			select {
