@@ -165,7 +165,7 @@ func runCommand(name string, args []string, env []string) (*exec.Cmd, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: os.GetPid()}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: os.Getpid()}
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("running %s %s, err: %w", cmd, args, err)
