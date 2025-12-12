@@ -76,12 +76,11 @@ func main() {
 	opt, err := parseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatalf("Error parsing arguments: %v", err)
-		return
 	}
 
 	err = opt.validate()
 	if err != nil {
-		log.Fatalf("Error validating option: %v", err)
+		log.Printf("Error validating option: %v", err)
 	}
 
 	if err != nil || opt.help {
@@ -94,7 +93,6 @@ func main() {
 	env, err := getEnviron(opt.filepath)
 	if err != nil {
 		log.Fatalf("Error getting Environ: %v", err)
-		return
 	}
 	if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
 		env = append(env, "PS1=(.env) # ")
@@ -102,7 +100,6 @@ func main() {
 	cmd, err := runCommand(opt.cmd[0], opt.cmd[1:], env)
 	if err != nil {
 		log.Fatalf("Error running command: %v", err)
-		return
 	}
 	waitChan := make(chan *exec.Cmd, 1)
 	waitChan <- cmd
@@ -139,7 +136,6 @@ func main() {
 			watchChan, err := watchFile(ctx, opt.filepath)
 			if err != nil {
 				log.Fatalf("Error watching file: %v", err)
-				return
 			}
 			for {
 				if cmd != nil && cmd.ProcessState != nil {
@@ -153,7 +149,6 @@ func main() {
 					env, err = getEnviron(opt.filepath)
 					if err != nil {
 						log.Fatalf("Error getting Environ: %v", err)
-						return
 					}
 					if strings.HasSuffix(opt.cmd[0], string(ShellTypeBash)) {
 						env = append(env, "PS1=(.env) # ")
@@ -162,7 +157,6 @@ func main() {
 					cmd, err = runCommand(opt.cmd[0], opt.cmd[1:], env)
 					if err != nil {
 						log.Fatalf("Error running command: %v", err)
-						return
 					}
 					log.Printf("Restarted command: %s %s", opt.cmd[0], strings.Join(opt.cmd[1:], " "))
 					waitChan <- cmd
@@ -176,7 +170,7 @@ func main() {
 
 	for cmd := range waitChan {
 		if err = cmd.Wait(); err != nil {
-			log.Fatalf("Error waiting for command: %v", err)
+			log.Printf("Error waiting for command: %v", err)
 		}
 	}
 }
@@ -208,7 +202,7 @@ func getEnviron(filepath string) ([]string, error) {
 		line := scanner.Bytes()
 		keyValue := strings.Split(string(line), "=")
 		if len(keyValue) != 2 {
-			log.Fatalf("Invalid line format %s", string(line))
+			log.Printf("Invalid line format %s", string(line))
 			continue
 		}
 		key := strings.TrimSpace(keyValue[0])
@@ -237,7 +231,7 @@ func watchFile(ctx context.Context, filepath string) (<-chan struct{}, error) {
 			case <-ticker.C:
 				latter, err := os.Stat(filepath)
 				if err != nil {
-					log.Fatalf("Error getting file info: %v", err)
+					log.Printf("Error getting file info: %v", err)
 					continue
 				}
 				if latter.ModTime().After(former.ModTime()) {
