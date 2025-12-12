@@ -21,7 +21,14 @@ const (
 )
 
 func printUsage() {
-	fmt.Println("Usage: dotenv [-f <file>] [-w]")
+	fmt.Println("Usage:")
+	fmt.Println("  dotenv [-f <file>] [-w] [-- <command>]")
+	fmt.Println("")
+	fmt.Println("Options:")
+	fmt.Println("  -f <file>\tspecify the .env file to use")
+	fmt.Println("  -w       \twatch the .env file for changes")
+	fmt.Println("  --       \tspecify the command to run")
+	fmt.Println("  -h       \tshow this help message")
 }
 
 type option struct {
