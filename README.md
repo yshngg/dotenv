@@ -32,8 +32,6 @@ dotenv [-f <file>] [-w] [-h] [-- <command>]
 - `--`: Separator to specify custom command to run (default: `$SHELL`)
 - `-h`: Show help
 
-**Note:** Custom commands must be preceded by `--` separator. Positional file arguments are not supported.
-
 ### Examples
 
 ```bash
