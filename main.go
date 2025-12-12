@@ -107,28 +107,8 @@ func main() {
 	if !opt.watch {
 		close(waitChan)
 	} else {
-		killChan := make(chan *exec.Cmd)
-
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		go func(ctx context.Context) {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case cmd := <-killChan:
-					if cmd == nil {
-						continue
-					}
-					log.Printf("Killing process: %d", cmd.Process.Pid)
-
-					if err = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-						log.Printf("Error killing process: %v", err)
-						continue
-					}
-				}
-			}
-		}(ctx)
 
 		go func(ctx context.Context, cmd *exec.Cmd) {
 			defer close(waitChan)
@@ -144,7 +124,11 @@ func main() {
 				select {
 				case <-watchChan:
 					if cmd != nil {
-						killChan <- cmd
+						if err = exec.Command("pkill", "-P", fmt.Sprintf("%d", cmd.Process.Pid)).Run(); err != nil {
+							log.Printf("Error killing process %d: %v", cmd.Process.Pid, err)
+						} else {
+							log.Printf("Killed process: %d", cmd.Process.Pid)
+						}
 					}
 					env, err = getEnviron(opt.filepath)
 					if err != nil {
